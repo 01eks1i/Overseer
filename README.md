@@ -49,7 +49,7 @@ The payment flow follows the [x402](https://solana.com/x402) pattern (HTTP 402 +
 | `src/scripts` | One-command devnet setup, test USDC, funding, approve / revoke / status from the command line | ✅ Done |
 | `src/api` | Paid API: 402 offers, on-chain payment check, weather service ($0.01) | ✅ Done |
 | `src/agent` | Agent wallet, paying `fetch`, MCP server for Claude, CLI demo | ✅ Done |
-| `web/` | **Dashboard**: connect a wallet, set / revoke the allowance, live payment feed | 🔲 To build (Task A) |
+| `web/` | **Dashboard**: connect a wallet, set / revoke the allowance, live payment feed | 🟡 Built, needs a live devnet test (Task A) |
 | `src/api/services.ts` | **API analyzer**: premium paid service | 🔲 To build (Task B) |
 | Demo run-through, prompts, backup recording | | 🔲 Task C |
 | Pitch deck (**.pptx only**) | | 🔲 Task D |
@@ -131,7 +131,12 @@ npm run status             # allowance, balances, agent SOL for fees
 
 Claude gets three tools: `overseer_status`, `overseer_list_services`, and `overseer_paid_fetch`.
 
-**With your own wallet** (for the dashboard): `npm run fund -- <your devnet address>` sends you 50 test USDC and a little SOL, and makes your wallet the one the agent spends from.
+**The dashboard**, terminal 3:
+```bash
+npm run fund -- <your devnet wallet address>   # 50 test USDC + a little SOL; the agent now spends from your wallet
+npm run web                                     # http://localhost:5173
+```
+Connect the same wallet, set an allowance, then let Claude (or `npm run demo`) spend. Payments appear in the live feed within a few seconds. Blocked ones flash red.
 
 ## Commands
 
@@ -145,7 +150,8 @@ Claude gets three tools: `overseer_status`, `overseer_list_services`, and `overs
 | `npm run api` | Start the paid API on http://localhost:4020 |
 | `npm run demo -- [city]` | The agent buys weather data from the command line |
 | `npm run mcp` | Start the MCP server by hand (Claude Code starts it for you) |
-| `npm run typecheck` | Type-check the backend |
+| `npm run web` | Start the dashboard on http://localhost:5173 |
+| `npm run typecheck` | Type-check the backend and the dashboard |
 
 ## Project structure
 
@@ -167,7 +173,10 @@ src/
     payments.ts           paywall middleware + on-chain payment check
     services.ts           paid services (add new ones here)
   scripts/                setup, fund, approve, revoke, status
-web/                      dashboard (Task A)
+web/                      dashboard (Vite + React + wallet adapter)
+  src/App.tsx             allowance card, approve / revoke, services, live feed
+  src/overseer.ts         reads the owner's token account + history from devnet
+  src/overseer.json       addresses written by setup (gitignored)
 ```
 
 ## Solana terms used here

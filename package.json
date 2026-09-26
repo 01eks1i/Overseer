@@ -4,6 +4,9 @@
   "private": true,
   "description": "Spending limits for AI agents, enforced by Solana",
   "type": "module",
+  "workspaces": [
+    "web"
+  ],
   "engines": {
     "node": ">=22"
   },
@@ -16,7 +19,8 @@
     "api": "tsx src/api/server.ts",
     "mcp": "tsx src/agent/mcp.ts",
     "demo": "tsx src/agent/demo.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && npm run typecheck -w web",
+    "web": "npm run dev -w web"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",
