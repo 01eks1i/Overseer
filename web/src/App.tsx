@@ -1,6 +1,6 @@
 import { config } from "./config";
 import { useOffice, useRoute } from "./api";
-import { Logo, ThemeToggle } from "./components/ui";
+import { ThemeToggle } from "./components/ui";
 import { AnalyzerPage } from "./pages/Analyzer";
 import { ProjectPage } from "./pages/ProjectDetail";
 import { ProjectsPage } from "./pages/Projects";
@@ -12,9 +12,9 @@ export function App() {
   return (
     <div className="shell">
       <header className="topbar">
-        <a className="brand" href="#/projects">
-          <Logo />
-          <span>ApiSift</span>
+        <a className="brand" href="/" title="ApiSift home">
+          <img className="brand-logo brand-logo-light" src="/brand/apisift-logo-light.png" alt="ApiSift" width={125} height={32} />
+          <img className="brand-logo brand-logo-dark" src="/brand/apisift-logo-dark.png" alt="ApiSift" width={125} height={32} />
         </a>
         <nav className="nav" aria-label="Main">
           <a href="#/projects" className={route.page === "analyzer" ? "" : "on"}>
@@ -40,6 +40,11 @@ export function App() {
             {error && (
               <p className="banner" role="alert">
                 {error}
+              </p>
+            )}
+            {!error && office?.stale && (
+              <p className="banner banner-soft" role="status">
+                {office.stale}. Showing balances from {new Date(office.updatedAt).toLocaleTimeString()}; they refresh as soon as Solana answers.
               </p>
             )}
             {route.page === "projects" && <ProjectsPage office={office} refresh={refresh} />}

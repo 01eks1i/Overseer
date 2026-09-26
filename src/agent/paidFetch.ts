@@ -55,7 +55,7 @@ export async function paidFetch(url: string, options: PaidFetchOptions = {}): Pr
   const payment = await payFromAllowance(
     new PublicKey(offer.extra.payToTokenAccount),
     price,
-    `${offer.extra.memo} ${offer.description}`,
+    `${offer.extra.memo} ${priceUsdc} USDC · ${offer.description}`,
     options.project,
   );
   if (!payment.ok) return { status: 402, body: null, priceUsdc, payment };

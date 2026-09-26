@@ -57,6 +57,9 @@ app.use(async (err: Error, _req: express.Request, res: express.Response, _next: 
   res.status(500).json({ error: err.message, refund: await refundPayment(res) });
 });
 
+// A stray rejected promise inside web3.js (e.g. a 429 during confirmation polling) must not take the API down.
+process.on("unhandledRejection", (reason) => console.error("[unhandled rejection]", reason));
+
 requireState(); // Fail fast if setup hasn't run.
 app.listen(API_PORT, () => {
   console.log(`Overseer paid API on ${API_BASE_URL}`);

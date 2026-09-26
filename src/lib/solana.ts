@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Connection, Keypair, PublicKey, TransactionInstruction, type TransactionError } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, TransactionInstruction, type Transaction, type TransactionError } from "@solana/web3.js";
 import { KEYS_DIR, RPC_URL } from "./config.js";
 
 export const connection = new Connection(RPC_URL, "confirmed");
@@ -62,3 +62,36 @@ export function describeTxError(err: TransactionError | null): string {
 }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Waits for a transaction to be confirmed and returns its error (null on success). Under RPC rate limiting
+ * the confirmation can time out ("block height exceeded") even though the transaction landed, so on a
+ * timeout it asks for the transaction's status before reporting a failure.
+ */
+export async function confirmSignature(signature: string, blockhash: string, lastValidBlockHeight: number): Promise<TransactionError | null> {
+  try {
+    const { value } = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+    return value.err;
+  } catch (error) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const status = (await connection.getSignatureStatuses([signature], { searchTransactionHistory: true }).catch(() => null))?.value[0];
+      if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") return status.err;
+      await sleep(1500);
+    }
+    throw error;
+  }
+}
+
+/** Signs, sends and confirms a transaction; the first signer pays the fee unless `tx.feePayer` is set. */
+export async function sendAndConfirm(
+  tx: Transaction,
+  signers: Keypair[],
+  options: { skipPreflight?: boolean } = {},
+): Promise<{ signature: string; err: TransactionError | null }> {
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+  tx.recentBlockhash = blockhash;
+  tx.feePayer ??= signers[0].publicKey;
+  tx.sign(...signers);
+  const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: options.skipPreflight });
+  return { signature, err: await confirmSignature(signature, blockhash, lastValidBlockHeight) };
+}

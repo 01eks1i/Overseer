@@ -10,12 +10,8 @@ export function AnalyzerPage({ office, refresh, preselect }: { office: Office | 
 
   const projects = office?.projects ?? [];
   const project = projects.find((p) => p.id === projectId);
-  const price = office?.analyzePriceUsdc ?? "0.25";
 
-  // Default to the preselected (or first) project, and prefill its repo.
-  useEffect(() => {
-    if (!projectId && projects.length) setProjectId(projects[0].id);
-  }, [projectId, projects]);
+  // Prefill the repo of the chosen project.
   const projectRepo = project?.repoUrl;
   useEffect(() => {
     if (projectRepo) setRepo((current) => current || projectRepo);
@@ -23,12 +19,11 @@ export function AnalyzerPage({ office, refresh, preselect }: { office: Office | 
 
   async function analyze(e: FormEvent) {
     e.preventDefault();
-    if (!project) return;
     setBusy(true);
     setError(null);
     setResult(null);
     try {
-      setResult(await api.analyze(project.id, repo.trim()));
+      setResult(await api.analyze(repo.trim(), project?.id));
       refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -37,68 +32,52 @@ export function AnalyzerPage({ office, refresh, preselect }: { office: Office | 
     }
   }
 
-  const belowPrice = project && Number(project.allowanceUsdc) < Number(price);
-
   return (
     <>
       <section className="page-head">
         <p className="eyebrow">API Analyzer</p>
         <h1>Your repository already knows what it needs.</h1>
         <p className="lede">
-          Paste a GitHub repository. ApiSift reads its code, README and dependencies, then recommends APIs that fit and says which ones an
-          agent can pay for per call. The project's agent pays {price} USDC for each analysis, on Solana.
+          Paste a GitHub repository. ApiSift reads its code, README and dependencies, then recommends APIs that fit and says which ones
+          your project's agent can pay for per call. Included in your subscription.
         </p>
       </section>
 
-      {office && projects.length === 0 ? (
-        <section className="card">
-          <p>
-            Analyses are paid from a project's budget. <a href="#/projects">Create a project first →</a>
-          </p>
-        </section>
-      ) : (
-        <form className="card analyze-form" onSubmit={analyze}>
-          <div className="field grow">
-            <label htmlFor="repo-url">GitHub repository</label>
-            <input
-              id="repo-url"
-              value={repo}
-              onChange={(e) => setRepo(e.target.value)}
-              placeholder="https://github.com/owner/repo"
-              required
-              disabled={busy}
-            />
-          </div>
+      <form className="card analyze-form" onSubmit={analyze}>
+        <div className="field grow">
+          <label htmlFor="repo-url">GitHub repository</label>
+          <input
+            id="repo-url"
+            value={repo}
+            onChange={(e) => setRepo(e.target.value)}
+            placeholder="https://github.com/owner/repo"
+            required
+            disabled={busy}
+          />
+        </div>
+        {projects.length > 0 && (
           <div className="field">
-            <label htmlFor="pay-project">Paid by project</label>
-            <select id="pay-project" value={projectId} onChange={(e) => setProjectId(e.target.value)} disabled={busy}>
+            <label htmlFor="for-project">For project (optional)</label>
+            <select id="for-project" value={projectId} onChange={(e) => setProjectId(e.target.value)} disabled={busy}>
+              <option value="">No project</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} · {p.allowanceUsdc} USDC left
+                  {p.name}
                 </option>
               ))}
             </select>
           </div>
-          <button type="submit" className="btn primary" disabled={busy || !project || !repo.trim()}>
-            {busy ? "Analyzing…" : `Analyze · ${price} USDC`}
-          </button>
-          {belowPrice && !busy && (
-            <p className="hint warn full">
-              {project.name}'s allowance ({project.allowanceUsdc} USDC) is below the price, so Solana will block this payment.{" "}
-              <a href={`#/projects/${project.id}`}>Raise the allowance</a>
-            </p>
-          )}
-        </form>
-      )}
+        )}
+        <button type="submit" className="btn primary" disabled={busy || !repo.trim()}>
+          {busy ? "Analyzing…" : "Analyze repository"}
+        </button>
+      </form>
 
       {busy && (
         <section className="card progress" aria-live="polite">
           <span className="spinner" aria-hidden="true" />
           <ol>
             <li>Reading the repository from GitHub</li>
-            <li>
-              {project?.name}'s agent pays {price} USDC on Solana (x402)
-            </li>
             <li>Claude matches the project to APIs in the catalog</li>
           </ol>
           <p className="hint">Usually 10 to 30 seconds.</p>
@@ -106,13 +85,14 @@ export function AnalyzerPage({ office, refresh, preselect }: { office: Office | 
       )}
 
       {error && <p className="notice notice-error">{error}</p>}
-      {result && <AnalysisView result={result} projectName={project?.name ?? "The project"} projectId={projectId} />}
+      {result && <AnalysisView result={result} projectId={project?.id} />}
     </>
   );
 }
 
-function AnalysisView({ result, projectName, projectId }: { result: AnalysisResult; projectName: string; projectId: string }) {
-  const { repo, payment, refund, recommendations } = result;
+function AnalysisView({ result, projectId }: { result: AnalysisResult; projectId?: string }) {
+  const { repo, recommendations } = result;
+  const payable = recommendations.filter((r) => /^yes/i.test(r.agentPayable)).length;
   return (
     <section className="results" aria-label="Analysis">
       <div className="result-head">
@@ -126,35 +106,15 @@ function AnalysisView({ result, projectName, projectId }: { result: AnalysisResu
         </span>
       </div>
 
-      {payment?.ok && (
-        <p className="receipt receipt-ok">
-          <span aria-hidden="true">✓</span> {projectName}'s agent paid {payment.amountUsdc} USDC for this analysis.{" "}
-          <a href={payment.explorer} target="_blank" rel="noreferrer">
-            View on Explorer ↗
-          </a>
-        </p>
-      )}
-      {payment && !payment.ok && (
-        <p className="receipt receipt-blocked">
-          <span aria-hidden="true">✕</span> <strong>Blocked by Solana.</strong> {payment.reason}{" "}
-          {payment.explorer && (
-            <a href={payment.explorer} target="_blank" rel="noreferrer">
-              Failed transaction ↗
-            </a>
-          )}{" "}
-          <a href={`#/projects/${projectId}`}>Raise the allowance →</a>
-        </p>
-      )}
-      {result.refused && <p className="receipt receipt-blocked">{result.refused}</p>}
-      {refund && (
-        <p className="receipt receipt-refund">
-          <span aria-hidden="true">↩</span> The analysis failed, so the payment was refunded to {projectName}'s budget.{" "}
-          <a href={refund} target="_blank" rel="noreferrer">
-            Refund on Explorer ↗
-          </a>
-        </p>
-      )}
       {result.error && <p className="notice notice-error">{result.error}</p>}
+
+      {recommendations.length > 0 && (
+        <p className="receipt receipt-ok">
+          <span aria-hidden="true">✓</span> {recommendations.length} API{recommendations.length === 1 ? "" : "s"} fit this repository
+          {payable > 0 && `, and ${payable} can be paid per call by an agent`}.{" "}
+          {projectId && payable > 0 && <a href={`#/projects/${projectId}`}>Set the project's allowance →</a>}
+        </p>
+      )}
 
       {recommendations.length > 0 && (
         <div className="recs">
@@ -163,9 +123,7 @@ function AnalysisView({ result, projectName, projectId }: { result: AnalysisResu
           ))}
         </div>
       )}
-      {payment?.ok && !result.error && recommendations.length === 0 && (
-        <p className="hint">No API in the catalog fits this repository yet.</p>
-      )}
+      {!result.error && recommendations.length === 0 && <p className="hint">No API in the catalog fits this repository yet.</p>}
     </section>
   );
 }

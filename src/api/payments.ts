@@ -1,10 +1,10 @@
 // Express middleware that puts a service behind an x402-style paywall and verifies payments on devnet.
 import { randomUUID } from "node:crypto";
 import type { RequestHandler, Response } from "express";
-import { PublicKey, Transaction, sendAndConfirmTransaction, type ParsedInstruction, type PartiallyDecodedInstruction } from "@solana/web3.js";
+import { PublicKey, Transaction, type ParsedInstruction, type PartiallyDecodedInstruction } from "@solana/web3.js";
 import { createTransferCheckedInstruction } from "@solana/spl-token";
 import { API_BASE_URL, NETWORK, requireState } from "../lib/config.js";
-import { connection, explorerTx, loadKeypair, memoInstruction, sleep, toBaseUnits } from "../lib/solana.js";
+import { connection, describeTxError, explorerTx, loadKeypair, memoInstruction, sendAndConfirm, sleep, toBaseUnits } from "../lib/solana.js";
 import { decodeHeader, encodeHeader, type PaymentPayload, type PaymentRequired, type PaymentResponse } from "../lib/x402.js";
 
 export interface PricedService {
@@ -121,7 +121,8 @@ export async function refundPayment(res: Response): Promise<string | undefined> 
   );
   tx.feePayer = admin.publicKey;
   try {
-    const signature = await sendAndConfirmTransaction(connection, tx, [admin, merchant]);
+    const { signature, err } = await sendAndConfirm(tx, [admin, merchant]);
+    if (err) throw new Error(`refund transaction failed on-chain: ${describeTxError(err)}`);
     console.log(`[refund] ${paid.amount} base units back to ${paid.source} (${signature})`);
     return explorerTx(signature);
   } catch (error) {

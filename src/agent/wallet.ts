@@ -6,7 +6,7 @@ import { LAMPORTS_PER_SOL, PublicKey, Transaction, type Keypair } from "@solana/
 import { createTransferCheckedInstruction, getAccount, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { requireState } from "../lib/config.js";
 import { findProject } from "../lib/projects.js";
-import { connection, describeTxError, explorerTx, fromBaseUnits, loadKeypair, memoInstruction } from "../lib/solana.js";
+import { connection, describeTxError, explorerTx, fromBaseUnits, loadKeypair, memoInstruction, sendAndConfirm } from "../lib/solana.js";
 
 interface Spender {
   agent: Keypair;
@@ -76,18 +76,12 @@ export async function payFromAllowance(destination: PublicKey, amount: bigint, m
     createTransferCheckedInstruction(source, mint, destination, agent.publicKey, amount, state.decimals),
     memoInstruction(memo.slice(0, 200)),
   );
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-  tx.feePayer = agent.publicKey;
-  tx.recentBlockhash = blockhash;
-  tx.sign(agent);
-
-  const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
-  const confirmation = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
-  if (!confirmation.value.err) return { ok: true, signature, explorer: explorerTx(signature), amountUsdc };
+  const { signature, err } = await sendAndConfirm(tx, [agent], { skipPreflight: true });
+  if (!err) return { ok: true, signature, explorer: explorerTx(signature), amountUsdc };
 
   return {
     ok: false,
-    reason: await explainRejection(source, agent.publicKey, amount, state.decimals, describeTxError(confirmation.value.err)),
+    reason: await explainRejection(source, agent.publicKey, amount, state.decimals, describeTxError(err)),
     signature,
     explorer: explorerTx(signature),
     amountUsdc,

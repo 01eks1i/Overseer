@@ -21,21 +21,19 @@ export function ProjectPage({ id, office, refresh }: { id: string; office: Offic
       </section>
     );
   }
-  return <ProjectView key={project.id} project={project} decimals={office.decimals} analyzePrice={office.analyzePriceUsdc} refresh={refresh} />;
+  return <ProjectView key={project.id} project={project} decimals={office.decimals} refresh={refresh} />;
 }
 
 function ProjectView({
   project: p,
   decimals,
-  analyzePrice,
   refresh,
 }: {
   project: ProjectSummary;
   decimals: number;
-  analyzePrice: string;
   refresh: () => void;
 }) {
-  const feed = useActivity(p.tokenAccount, p.agent, decimals);
+  const feed = useActivity(p.id);
   const [amount, setAmount] = useState("0.50");
   const [pending, setPending] = useState<"allowance" | "revoke" | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -84,7 +82,7 @@ function ProjectView({
           )}
         </div>
         <a className="btn secondary" href={`#/analyzer?project=${p.id}`}>
-          Analyze repo · {analyzePrice} USDC
+          Analyze repo
         </a>
       </section>
 

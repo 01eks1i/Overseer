@@ -24,11 +24,11 @@ export function ActivityFeed({ activity, error }: { activity: Activity[]; error:
     <section className="card feed" aria-labelledby="feed-title">
       <div className="card-head">
         <h2 id="feed-title">Live activity</h2>
-        <span className="live">
-          <i aria-hidden="true" /> Live from Solana devnet
+        <span className={`live${error ? " stale" : ""}`}>
+          <i aria-hidden="true" /> {error ? "Reconnecting to Solana" : "Live from Solana devnet"}
         </span>
       </div>
-      {error && <p className="hint">Can't reach the Solana RPC right now ({error}). Retrying…</p>}
+      {error && <p className="hint warn">{error}</p>}
       {activity.length === 0 ? (
         <div className="empty">
           <p>No activity yet.</p>

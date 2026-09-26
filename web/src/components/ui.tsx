@@ -1,17 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ProjectSummary } from "../api";
 
-export function Logo() {
-  // A sieve: wide input, narrowing to the one API that fits.
-  return (
-    <svg className="logo" viewBox="0 0 28 28" aria-hidden="true">
-      <rect x="3" y="6" width="22" height="3.2" rx="1.6" fill="currentColor" opacity="0.35" />
-      <rect x="7" y="12.4" width="14" height="3.2" rx="1.6" fill="currentColor" opacity="0.65" />
-      <rect x="11" y="18.8" width="6" height="3.2" rx="1.6" className="logo-accent" />
-    </svg>
-  );
-}
-
 export function projectStatus(p: ProjectSummary): { label: string; tone: "ok" | "warn" | "muted" } {
   if (p.delegated && Number(p.allowanceUsdc) > 0) return { label: "Active", tone: "ok" };
   if (p.delegated) return { label: "Used up", tone: "warn" };

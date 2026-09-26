@@ -22,8 +22,28 @@ export interface Office {
   wallet: { address: string; tokenAccount: string; balanceUsdc: string };
   mint: string;
   decimals: number;
-  analyzePriceUsdc: string;
   projects: ProjectSummary[];
+  /** When the server last read devnet successfully (ms since epoch). */
+  updatedAt: number;
+  /** Set when the latest devnet read failed and this data is older than usual. */
+  stale: string | null;
+}
+
+export type ActivityKind = "paid" | "blocked" | "refunded" | "allowance" | "revoked" | "funded" | "withdrawn" | "created" | "failed";
+
+export interface Activity {
+  signature: string;
+  time: number | null;
+  kind: ActivityKind;
+  title: string;
+  detail?: string;
+  amount?: string;
+}
+
+export interface ActivityFeed {
+  activity: Activity[];
+  updatedAt: number;
+  stale: string | null;
 }
 
 export interface Recommendation {
@@ -45,12 +65,8 @@ export interface AnalysisResult {
     /** Only README and dependency files were read (GitHub API limit). */
     partial: boolean;
   };
-  priceUsdc: string | null;
-  payment: { ok: true; explorer: string; amountUsdc: string } | { ok: false; reason: string; explorer?: string; amountUsdc: string } | null;
-  refused: string | null;
   recommendations: Recommendation[];
   error: string | null;
-  refund: string | null;
 }
 
 async function call<T>(path: string, body?: unknown): Promise<T> {
@@ -76,10 +92,31 @@ export const api = {
   setAllowance: (id: string, amountUsdc: string) =>
     call<{ allowanceUsdc: string; toppedUpUsdc: string; explorer: string }>(`/projects/${id}/allowance`, { amountUsdc }),
   revoke: (id: string) => call<{ returnedUsdc: string; explorer: string }>(`/projects/${id}/revoke`, {}),
-  analyze: (id: string, repoUrl: string) => call<AnalysisResult>(`/projects/${id}/analyze`, { repoUrl }),
+  /** Free for people using the web app (ApiSift is paid for with a subscription). */
+  analyze: (repoUrl: string, projectId?: string) => call<AnalysisResult>("/analyze", { repoUrl, projectId }),
+  activity: (id: string) => call<ActivityFeed>(`/projects/${id}/activity`),
 };
 
-/** Polls the office (wallet, projects, allowances) every few seconds. */
+/**
+ * Runs `task` now and every `ms` while the tab is visible, and right away when it becomes visible again.
+ * Hidden tabs don't poll, which keeps load on the API (and Solana) down.
+ */
+export function useVisiblePolling(task: () => void, ms: number) {
+  useEffect(() => {
+    task();
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") task();
+    }, ms);
+    const onVisible = () => document.visibilityState === "visible" && task();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [task, ms]);
+}
+
+/** Polls the office (wallet, projects, allowances) every few seconds while the tab is visible. */
 export function useOffice() {
   const [office, setOffice] = useState<Office | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -92,11 +129,7 @@ export function useOffice() {
       (e: Error) => setError(e.message),
     );
   }, []);
-  useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 4000);
-    return () => clearInterval(id);
-  }, [refresh]);
+  useVisiblePolling(refresh, 5000);
   return { office, error, refresh };
 }
 

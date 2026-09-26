@@ -119,13 +119,28 @@ h3 {
   font-size: 22px;
   letter-spacing: -0.02em;
 }
-.logo {
-  width: 30px;
-  height: 30px;
-  color: var(--ink);
+/* Two logo files: navy for light backgrounds, white for dark ones. */
+.brand-logo {
+  height: 32px;
+  width: auto;
+  display: block;
 }
-.logo-accent {
-  fill: var(--accent);
+.brand-logo-dark {
+  display: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .brand-logo-light {
+    display: none;
+  }
+  :root:not([data-theme="light"]) .brand-logo-dark {
+    display: block;
+  }
+}
+:root[data-theme="dark"] .brand-logo-light {
+  display: none;
+}
+:root[data-theme="dark"] .brand-logo-dark {
+  display: block;
 }
 .nav {
   display: flex;
@@ -349,6 +364,11 @@ label {
 .notice-error {
   background: var(--danger-soft);
   color: var(--danger);
+}
+.banner-soft {
+  background: var(--raised);
+  color: var(--mute);
+  font-weight: 500;
 }
 .banner {
   margin: 0;
@@ -577,6 +597,9 @@ a.fact-value {
   gap: 7px;
   font-size: 13px;
   color: var(--mute);
+}
+.live.stale i {
+  background: var(--warn);
 }
 .live i {
   width: 8px;

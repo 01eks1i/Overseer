@@ -53,7 +53,7 @@ The payment flow follows the [x402](https://solana.com/x402) pattern (HTTP 402 +
 | `src/agent` | Agent wallet, paying `fetch`, MCP server for Claude, CLI demo | ✅ Done |
 | `web/` | **ApiSift web app**: Projects (each with its own budget, agent and allowance), project detail with live feed, API Analyzer page | ✅ Built, tested against the API; not yet reviewed in a browser by the team |
 | `src/api/office.ts` | **Office API** behind the web app: projects, allowances, repo analysis (demo wallet, localhost only) | ✅ Done, tested on devnet |
-| `src/api/services.ts` | **API analyzer** paid service (0.25 USDC): structured outputs over a curated catalog, refunds on failure | 🟡 Needs a workspace-scoped Anthropic key (see Troubleshooting) |
+| `src/api/services.ts` | **API analyzer**: structured outputs over a curated catalog. Free in the web app; a paid x402 service (0.25 USDC) for agents, refunded on failure | ✅ Working |
 | Demo run-through, prompts, backup recording | | 🔲 Task C |
 | Pitch deck (**.pptx only**) | | 🔲 Task D |
 
@@ -136,11 +136,13 @@ Claude gets three tools: `overseer_status`, `overseer_list_services`, and `overs
 
 **The ApiSift web app**, terminal 3:
 ```bash
-npm run web      # http://localhost:5173
+npm run web      # http://localhost:5173 (landing page); the office is at /app.html
 ```
+The landing page's **Your account → Your profile** opens the office (`/app.html#/projects`). Subscription, Settings and Log out are placeholders. Logos live in `web/public/brand/` (a navy version for light mode, a white one for dark mode).
+
 - **Projects** (`#/projects`): the office. Create a project and it gets its own agent key and its own budget account on Solana. Every project's allowance is a separate on-chain limit.
 - **Project page** (`#/projects/<id>`): set or revoke the allowance (signed by the demo wallet), the agent and budget accounts, the `.mcp.json` snippet that points Claude at this project, and the live activity feed.
-- **API Analyzer** (`#/analyzer`): paste a public GitHub repo link and pick a project. ApiSift reads the repo for free, then the project's agent pays 0.25 USDC over x402 and Claude recommends APIs from the catalog. If the project's allowance is too small, Solana blocks the payment; if the analysis fails after payment, the money is refunded.
+- **API Analyzer** (`#/analyzer`): paste a public GitHub repo link (optionally pick a project to prefill its repo). ApiSift reads the repo and Claude recommends APIs from the catalog, marking which ones an agent can pay for per call. **Free for people using the app**: ApiSift is paid for with a subscription. Agents that want the same analysis buy it per call from the paid `/api/analyze` service over x402 (0.25 USDC), which is where Solana's spending limits and blocks show up.
 
 The web app uses the built-in **demo wallet** (`keys/owner.json`), so no browser wallet is needed. Its office API only answers requests from the same machine.
 
@@ -186,10 +188,12 @@ src/
     github.ts             reads a public repo: metadata, file tree, README, dependency manifest
   scripts/                setup, fund, approve, revoke, status
 web/                      ApiSift web app (Vite + React)
+  index.html              landing page (compiled build from the design team, with the account menu added)
+  app.html                the office app (entry: src/main.tsx)
   src/App.tsx             shell, navigation, routes (#/projects, #/projects/<id>, #/analyzer)
   src/pages/              Projects, ProjectDetail, Analyzer
   src/api.ts              office API client + hash router
-  src/overseer.ts         activity feed: reads a budget account's history from devnet
+  src/overseer.ts         helpers + activity feed hook (data comes from the office API)
   src/overseer.json       addresses written by setup (gitignored)
 ```
 
@@ -209,7 +213,7 @@ web/                      ApiSift web app (Vite + React)
 - Our 402 flow follows x402, but **the agent submits the transaction itself** instead of using an x402 facilitator, because it pays as a delegate of someone else's account.
 - Test USDC is our own devnet token, so wallets show it as an unknown token.
 - The paid API keeps payment challenges and used transactions **in memory**. Restarting it clears them.
-- The public devnet RPC is rate-limited. Put a free [Helius](https://www.helius.dev/) devnet URL in `RPC_URL` for the demo.
+- The public devnet RPC is rate-limited per IP, and at a venue everyone shares one IP. To cope, the browser never calls Solana: the API server caches devnet reads, shares them across tabs, backs off when refused and serves the last good data marked as stale. The activity feed is built from the memos in the signature list (one call), with detailed transaction lookups added when they get through. A free [Helius](https://www.helius.dev/) devnet `RPC_URL` still removes the problem entirely.
 - The web app signs with a **demo wallet held by the server**. A real product would sign in the user's wallet (Phantom etc.).
 - A refund returns the money but not the allowance: the Token program already used up that part of the delegation, so set the allowance again.
 - The analyzer only recommends APIs from `src/api/apiCatalog.ts`, which is small. GitHub allows 60 unauthenticated API calls an hour per IP; set `GITHUB_TOKEN` in `.env` if you hit that.

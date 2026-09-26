@@ -7,7 +7,6 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
-  sendAndConfirmTransaction,
   type ParsedAccountData,
   type TransactionInstruction,
 } from "@solana/web3.js";
@@ -22,11 +21,12 @@ import {
   getAssociatedTokenAddressSync,
   getMinimumBalanceForRentExemptAccount,
 } from "@solana/spl-token";
-import { paidFetch } from "../agent/paidFetch.js";
-import { API_BASE_URL, requireState } from "../lib/config.js";
+import { requireState } from "../lib/config.js";
+import { activityFromSignature, parseActivity, type Activity } from "../lib/activity.js";
 import { findProject, listProjects, newProjectId, saveProject, type Project } from "../lib/projects.js";
-import { connection, explorerTx, fromBaseUnits, loadKeypair, memoInstruction, toBaseUnits } from "../lib/solana.js";
+import { connection, describeTxError, explorerTx, fromBaseUnits, loadKeypair, memoInstruction, sendAndConfirm, toBaseUnits } from "../lib/solana.js";
 import { parseRepoUrl, readGithubRepo, UserError } from "./github.js";
+import { analyzerConfigured, runAnalysis } from "./services.js";
 
 export const office = Router();
 
@@ -41,7 +41,57 @@ async function send(instructions: TransactionInstruction[], signers: Keypair[]):
   const admin = loadKeypair("admin");
   const tx = new Transaction().add(...instructions);
   tx.feePayer = admin.publicKey;
-  return sendAndConfirmTransaction(connection, tx, [admin, ...signers]);
+  const { signature, err } = await sendAndConfirm(tx, [admin, ...signers]);
+  // Balances and feeds changed: refresh them on the next request.
+  officeCache.expire();
+  for (const feed of feeds.values()) feed.expire();
+  if (err) throw new Error(`The transaction failed on-chain: ${describeTxError(err)}`);
+  return signature;
+}
+
+/**
+ * Devnet reads are cached and shared by every browser tab, so the web app never talks to Solana itself.
+ * When the RPC refuses (the public endpoint rate-limits per IP), it backs off and keeps serving the last
+ * good value, marked stale, instead of an error.
+ */
+class DevnetCache<T> {
+  private value: T | undefined;
+  private updatedAt = 0;
+  private nextRefreshAt = 0;
+  private pending: Promise<void> | undefined;
+  private error: string | null = null;
+
+  constructor(
+    private readonly load: () => Promise<T>,
+    private readonly ttlMs: number,
+    private readonly backoffMs = 10_000,
+  ) {}
+
+  expire() {
+    this.nextRefreshAt = 0;
+  }
+
+  async get(): Promise<{ value: T; updatedAt: number; stale: string | null }> {
+    if (Date.now() >= this.nextRefreshAt) {
+      this.pending ??= this.load()
+        .then((value) => {
+          this.value = value;
+          this.updatedAt = Date.now();
+          this.error = null;
+          this.nextRefreshAt = Date.now() + this.ttlMs;
+        })
+        .catch((error: Error) => {
+          this.error = error.message.includes("429") ? "Solana devnet is rate-limiting this network" : error.message;
+          this.nextRefreshAt = Date.now() + this.backoffMs;
+        })
+        .finally(() => {
+          this.pending = undefined;
+        });
+      await this.pending;
+    }
+    if (this.value === undefined) throw new Error(this.error ?? "No data from Solana yet");
+    return { value: this.value, updatedAt: this.updatedAt, stale: this.error };
+  }
 }
 
 function requireProject(req: Request): Project {
@@ -50,7 +100,7 @@ function requireProject(req: Request): Project {
   return project;
 }
 
-office.get("/", async (_req, res) => {
+async function loadOffice() {
   const state = requireState();
   const owner = loadKeypair("owner").publicKey;
   const wallet = getAssociatedTokenAddressSync(new PublicKey(state.mint), owner);
@@ -70,11 +120,10 @@ office.get("/", async (_req, res) => {
       : null;
   };
 
-  res.json({
+  return {
     wallet: { address: owner.toBase58(), tokenAccount: wallet.toBase58(), balanceUsdc: tokenInfo(0)?.tokenAmount.uiAmountString ?? "0" },
     mint: state.mint,
     decimals: state.decimals,
-    analyzePriceUsdc: "0.25",
     projects: projects.map((project, i) => {
       const budget = tokenInfo(1 + 2 * i);
       const delegated = budget?.delegate === project.agent;
@@ -86,7 +135,63 @@ office.get("/", async (_req, res) => {
         agentSol: (value[2 + 2 * i]?.lamports ?? 0) / LAMPORTS_PER_SOL,
       };
     }),
-  });
+  };
+}
+
+const officeCache = new DevnetCache(loadOffice, 3_000);
+
+office.get("/", async (_req, res) => {
+  const { value, updatedAt, stale } = await officeCache.get();
+  res.json({ ...value, updatedAt, stale });
+});
+
+// Activity feed of one project's budget account, parsed on the server and cached per project.
+const FEED_CHUNK = 5;
+const feeds = new Map<string, DevnetCache<Activity[]>>();
+
+function feedFor(project: Project): DevnetCache<Activity[]> {
+  let feed = feeds.get(project.id);
+  if (!feed) {
+    const parsed = new Map<string, Activity | null>();
+    const decimals = requireState().decimals;
+    feed = new DevnetCache(async () => {
+      const sigs = await connection.getSignaturesForAddress(new PublicKey(project.tokenAccount), { limit: 25 });
+      const unseen = sigs.map((s) => s.signature).filter((s) => !parsed.has(s));
+      // Fetch in small chunks: the public RPC also limits each method per IP, and a 30-transaction batch
+      // trips it. Parsed transactions are kept, so after a refusal the next refresh continues where it stopped.
+      for (let i = 0; i < unseen.length; i += FEED_CHUNK) {
+        let txs;
+        try {
+          txs = await connection.getParsedTransactions(unseen.slice(i, i + FEED_CHUNK), {
+            maxSupportedTransactionVersion: 0,
+            commitment: "confirmed",
+          });
+        } catch {
+          break; // show what we have; the rest arrives on later refreshes
+        }
+        // Batched RPC responses can come back out of order, so key each result by its own signature.
+        // Transactions not found yet stay unseen and are retried on the next refresh.
+        for (const tx of txs) {
+          if (tx) parsed.set(tx.transaction.signatures[0], parseActivity(tx.transaction.signatures[0], tx, project.tokenAccount, project.agent, decimals));
+        }
+      }
+      // Detailed parse where we have it, otherwise the row built from the signature list's memo.
+      return sigs.map((s) => parsed.get(s.signature) ?? activityFromSignature(s)).filter((a): a is Activity => !!a);
+    }, 3_000);
+    feeds.set(project.id, feed);
+  }
+  return feed;
+}
+
+office.get("/projects/:id/activity", async (req, res) => {
+  const feed = feedFor(requireProject(req));
+  try {
+    const { value, updatedAt, stale } = await feed.get();
+    res.json({ activity: value, updatedAt, stale });
+  } catch (error) {
+    // Nothing loaded yet (Solana refused the very first read): an empty feed that says why, not an error.
+    res.json({ activity: [], updatedAt: 0, stale: (error as Error).message });
+  }
 });
 
 office.post("/projects", async (req, res) => {
@@ -185,28 +290,27 @@ office.post("/projects/:id/revoke", async (req, res) => {
   res.json({ returnedUsdc: fromBaseUnits(budgetAccount.amount, state.decimals), explorer: explorerTx(signature) });
 });
 
-// Reads a GitHub repo (free), then has the project's agent buy an analysis from the paid API via x402.
-office.post("/projects/:id/analyze", async (req, res) => {
-  const project = requireProject(req);
-  const repoUrl = String(req.body?.repoUrl ?? project.repoUrl ?? "").trim();
+// Repo analysis for people using the web app: free (covered by the ApiSift subscription). Agents that want
+// the same analysis buy it per call from the paid /api/analyze service over x402.
+office.post("/analyze", async (req, res) => {
+  const projectId = String(req.body?.projectId ?? "").trim();
+  const project = projectId ? findProject(projectId) : undefined;
+  const repoUrl = String(req.body?.repoUrl ?? project?.repoUrl ?? "").trim();
   if (!repoUrl) throw new UserError("Paste a GitHub repository link.");
-  const repo = await readGithubRepo(repoUrl); // bad links and private repos fail here, before anything is paid
+  if (!analyzerConfigured()) throw new UserError("The analyzer isn't configured on this server (ANTHROPIC_API_KEY is missing from .env).");
+  const repo = await readGithubRepo(repoUrl);
 
-  const prompt = [
-    `GitHub repository ${repo.fullName}${repo.description ? `: ${repo.description}` : ""}`,
-    repo.language && `Main language: ${repo.language}`,
-    repo.manifest && `Dependencies (${repo.manifestPath}):\n${repo.manifest}`,
-  ]
+  // The analyzer caps `prompt` at 500 characters, so it only gets a short description; the dependency
+  // manifest (the strongest signal of what the code calls) goes first in the longer README field.
+  const prompt = [`GitHub repository ${repo.fullName}${repo.description ? `: ${repo.description}` : ""}`, repo.language && `Main language: ${repo.language}`]
+    .filter(Boolean)
+    .join(". ");
+  const readme = [repo.manifest && `Dependencies (${repo.manifestPath}):\n${repo.manifest}`, repo.readme && `README:\n${repo.readme}`]
     .filter(Boolean)
     .join("\n\n");
-  const result = await paidFetch(`${API_BASE_URL}/api/analyze`, {
-    method: "POST",
-    body: JSON.stringify({ prompt, projectTree: repo.tree, readme: repo.readme }),
-    project: project.id,
-  });
-  if (!project.repoUrl) saveProject({ ...project, repoUrl: repo.url });
+  const result = await runAnalysis({ prompt, projectTree: repo.tree, readme });
+  if (project && !project.repoUrl) saveProject({ ...project, repoUrl: repo.url });
 
-  const body = (result.body ?? {}) as { recommendations?: unknown[]; error?: string; refund?: string };
   res.json({
     repo: {
       fullName: repo.fullName,
@@ -216,12 +320,8 @@ office.post("/projects/:id/analyze", async (req, res) => {
       fileCount: repo.fileCount,
       partial: repo.partial,
     },
-    priceUsdc: result.priceUsdc ?? null,
-    payment: result.payment ?? null,
-    refused: result.refused ?? null,
-    recommendations: body.recommendations ?? [],
-    error: result.status >= 400 && result.payment?.ok !== false ? (body.error ?? `The analyzer answered HTTP ${result.status}`) : null,
-    refund: body.refund ?? null,
+    recommendations: result.ok ? result.recommendations : [],
+    error: result.ok ? null : result.error,
   });
 });
 
