@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .env
+.env.*
 # Devnet keypairs and local state: never commit
 keys/
 .overseer/
