@@ -52,9 +52,9 @@ export const apiCatalog: CatalogApi[] = [
     name: "Overseer Weather API (Demo)",
     category: "Weather",
     description: "Demo weather API running on the local project that supports agentic microtransactions.",
-    docsUrl: "http://localhost:3000/api/weather",
+    docsUrl: "http://localhost:4020/api/weather",
     pricing: "$0.01 USDC per request.",
-    authentication: "Solana L402 payment header.",
+    authentication: "HTTP 402 + X-PAYMENT + Solana (x402-style).",
     agentPayable: "Yes — supports per-request payment via crypto."
   }
 ];
