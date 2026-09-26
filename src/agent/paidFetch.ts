@@ -10,6 +10,8 @@ export interface PaidFetchOptions {
   body?: string;
   /** The agent's own per-request price limit. The chain-enforced cap is the allowance itself. */
   maxPriceUsdc?: number;
+  /** ApiSift project whose budget pays; defaults to the original single agent. */
+  project?: string;
 }
 
 export interface PaidFetchResult {
@@ -50,7 +52,12 @@ export async function paidFetch(url: string, options: PaidFetchOptions = {}): Pr
     return { status: 402, body: required, priceUsdc, refused: `Price ${priceUsdc} USDC is above the requested limit of ${options.maxPriceUsdc} USDC.` };
   }
 
-  const payment = await payFromAllowance(new PublicKey(offer.extra.payToTokenAccount), price, `${offer.extra.memo} ${offer.description}`);
+  const payment = await payFromAllowance(
+    new PublicKey(offer.extra.payToTokenAccount),
+    price,
+    `${offer.extra.memo} ${offer.description}`,
+    options.project,
+  );
   if (!payment.ok) return { status: 402, body: null, priceUsdc, payment };
 
   const proof: PaymentPayload = {

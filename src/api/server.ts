@@ -1,5 +1,6 @@
 import express from "express";
 import { API_BASE_URL, API_PORT, NETWORK, requireState } from "../lib/config.js";
+import { office } from "./office.js";
 import { refundPayment, requirePayment } from "./payments.js";
 import { services } from "./services.js";
 
@@ -15,6 +16,9 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// ApiSift office (projects, allowances, repo analysis) for the web app; demo wallet, localhost only.
+app.use("/api/office", office);
 
 app.get("/api/services", (_req, res) => {
   const state = requireState();

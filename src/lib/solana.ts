@@ -7,7 +7,8 @@ export const connection = new Connection(RPC_URL, "confirmed");
 
 export const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 
-export type KeyName = "admin" | "agent" | "merchant" | "owner";
+// `agent-<project id>` holds the agent key of one ApiSift project.
+export type KeyName = "admin" | "agent" | "merchant" | "owner" | `agent-${string}`;
 
 /** Loads keys/<name>.json, generating it on first use. These are devnet-only keys. */
 export function loadKeypair(name: KeyName): Keypair {
