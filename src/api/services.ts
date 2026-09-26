@@ -1,5 +1,6 @@
 // Paid services sold by the Overseer demo API. Add a service here and it is listed and paywalled automatically.
 import type { Request, Response } from "express";
+import Anthropic from "@anthropic-ai/sdk";
 import type { PricedService } from "./payments.js";
 
 export interface Service extends PricedService {
@@ -66,4 +67,58 @@ const weather: Service = {
   },
 };
 
-export const services: Service[] = [weather];
+const anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY from the environment
+
+interface AnalyzeBody {
+  prompt: string;
+  projectTree?: string;
+  readme?: string;
+}
+
+const analyze: Service = {
+  id: "analyze",
+  method: "POST",
+  path: "/api/analyze",
+  priceUsdc: "0.25",
+  description: "Recommends existing APIs that fit a project's scope and goals",
+  params: {
+    prompt: "What you're building, e.g. \"a Discord bot that tracks crypto prices\"",
+    projectTree: "(optional) the project's file tree, for extra context",
+    readme: "(optional) the project's README, for extra context",
+  },
+  validate: (req) => {
+    const { prompt } = (req.body ?? {}) as Partial<AnalyzeBody>;
+    return typeof prompt === "string" && prompt.trim() ? null : "Body field `prompt` is required";
+  },
+  async handle(req, res) {
+    const { prompt, projectTree, readme } = req.body as AnalyzeBody;
+    const context = [`Project: ${prompt}`, projectTree && `File tree:\n${projectTree}`, readme && `README:\n${readme}`]
+      .filter(Boolean)
+      .join("\n\n");
+
+    const message = await anthropic.messages.create({
+      model: "claude-sonnet-5",
+      max_tokens: 2048,
+      system:
+        "You recommend existing, real, currently-available web APIs that fit a software project's scope and goals. " +
+        "Respond with ONLY a JSON array (no prose, no markdown fences). Each item: " +
+        '{"name": string, "whatItDoes": string, "whyItFits": string, "pricingAndAuth": string, "docsUrl": string, "agentPayable": string}. ' +
+        '"agentPayable" says whether an AI agent could pay for this API per request today (e.g. via x402 / stablecoins), or whether it needs a conventional account, API key, or card. ' +
+        "Recommend 3 to 6 real APIs. Never invent an API that doesn't exist.",
+      messages: [{ role: "user", content: context }],
+    });
+
+    const text = message.content.find((block) => block.type === "text")?.text ?? "[]";
+    let recommendations: unknown;
+    try {
+      recommendations = JSON.parse(text);
+    } catch {
+      res.status(502).json({ error: "Claude returned a response that wasn't valid JSON", raw: text });
+      return;
+    }
+
+    res.json({ recommendations, payment: res.locals.payment });
+  },
+};
+
+export const services: Service[] = [weather, analyze];
