@@ -1,7 +1,29 @@
 // Paid services sold by the Overseer demo API. Add a service here and it is listed and paywalled automatically.
 import type { Request, Response } from "express";
 import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
 import type { PricedService } from "./payments.js";
+import { apiCatalog } from "./apiCatalog.js";
+
+function cleanJsonText(text: string): string {
+  return text
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+}
+
+const ApiRecommendationSchema = z.object({
+  name: z.string(),
+  whatItDoes: z.string(),
+  whyItFits: z.string(),
+  pricingAndAuth: z.string(),
+  docsUrl: z.string().url(),
+  agentPayable: z.string(),
+});
+
+const ApiRecommendationsSchema = z.array(ApiRecommendationSchema);
 
 export interface Service extends PricedService {
   method: "GET" | "POST";
@@ -96,25 +118,53 @@ const analyze: Service = {
       .filter(Boolean)
       .join("\n\n");
 
-    const message = await anthropic.messages.create({
+    const systemPrompt = `You recommend existing, real, currently-available web APIs that fit a software project's scope and goals.
+Here is the curated catalog of known APIs:
+${JSON.stringify(apiCatalog, null, 2)}
+
+Recommend ONLY APIs from this catalog whenever there is a suitable match.
+Do not invent APIs. Do not invent URLs, pricing, authentication, or capabilities.
+If no catalog entry fits the project's scope and goals, return an empty array [].
+The output must be ONLY a valid JSON array matching this exact schema for each object:
+{"name": string, "whatItDoes": string, "whyItFits": string, "pricingAndAuth": string, "docsUrl": string, "agentPayable": string}
+
+"agentPayable" should be a descriptive string (e.g. "Yes — supports per-request payment" or "No — requires API key/account").
+Recommend 3 to 6 real APIs from the catalog if possible.`;
+
+    let message = await anthropic.messages.create({
       model: "claude-sonnet-5",
       max_tokens: 2048,
-      system:
-        "You recommend existing, real, currently-available web APIs that fit a software project's scope and goals. " +
-        "Respond with ONLY a JSON array (no prose, no markdown fences). Each item: " +
-        '{"name": string, "whatItDoes": string, "whyItFits": string, "pricingAndAuth": string, "docsUrl": string, "agentPayable": string}. ' +
-        '"agentPayable" says whether an AI agent could pay for this API per request today (e.g. via x402 / stablecoins), or whether it needs a conventional account, API key, or card. ' +
-        "Recommend 3 to 6 real APIs. Never invent an API that doesn't exist.",
+      system: systemPrompt,
       messages: [{ role: "user", content: context }],
     });
 
-    const text = message.content.find((block) => block.type === "text")?.text ?? "[]";
-    let recommendations: unknown;
+    let text = message.content.find((block) => block.type === "text")?.text ?? "[]";
+    let cleaned = cleanJsonText(text);
+    let recommendations: z.infer<typeof ApiRecommendationsSchema>;
+
     try {
-      recommendations = JSON.parse(text);
-    } catch {
-      res.status(502).json({ error: "Claude returned a response that wasn't valid JSON", raw: text });
-      return;
+      recommendations = ApiRecommendationsSchema.parse(JSON.parse(cleaned));
+    } catch (err) {
+      message = await anthropic.messages.create({
+        model: "claude-sonnet-5",
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages: [
+          { role: "user", content: context },
+          { role: "assistant", content: text },
+          { role: "user", content: "The previous response was either not valid JSON or did not match the required schema. Return ONLY valid JSON matching the schema, with no markdown fences or extra text." }
+        ],
+      });
+      
+      text = message.content.find((block) => block.type === "text")?.text ?? "[]";
+      cleaned = cleanJsonText(text);
+      
+      try {
+        recommendations = ApiRecommendationsSchema.parse(JSON.parse(cleaned));
+      } catch (err2) {
+        res.status(502).json({ error: "Claude returned a response that wasn't valid JSON or didn't match schema after retry", raw: text });
+        return;
+      }
     }
 
     res.json({ recommendations, payment: res.locals.payment });
