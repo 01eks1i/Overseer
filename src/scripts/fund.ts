@@ -16,12 +16,12 @@ const admin = loadKeypair("admin");
 const mint = new PublicKey(state.mint);
 const wallet = target === "test" ? loadKeypair("owner").publicKey : new PublicKey(target);
 
-if ((await connection.getBalance(wallet)) < 0.02 * LAMPORTS_PER_SOL) {
+if ((await connection.getBalance(wallet)) < 0.01 * LAMPORTS_PER_SOL) {
   const tx = new Transaction().add(
-    SystemProgram.transfer({ fromPubkey: admin.publicKey, toPubkey: wallet, lamports: 0.05 * LAMPORTS_PER_SOL }),
+    SystemProgram.transfer({ fromPubkey: admin.publicKey, toPubkey: wallet, lamports: 0.02 * LAMPORTS_PER_SOL }),
   );
   await sendAndConfirmTransaction(connection, tx, [admin]);
-  console.log("Sent 0.05 SOL for fees");
+  console.log("Sent 0.02 SOL for fees");
 }
 
 const account = await getOrCreateAssociatedTokenAccount(connection, admin, mint, wallet);

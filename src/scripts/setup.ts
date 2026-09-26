@@ -6,7 +6,9 @@ import { readState, writeState } from "../lib/config.js";
 import { connection, explorerAddress, loadKeypair, toBaseUnits } from "../lib/solana.js";
 
 const DECIMALS = 6;
-const MIN_ADMIN_SOL = 0.5;
+// Setup itself needs ~0.08 SOL (fees for agent + test owner, mint and token account rent);
+// the rest pays for `npm run fund`. Kept low because devnet faucets are tightly rate-limited.
+const MIN_ADMIN_SOL = 0.25;
 
 const admin = loadKeypair("admin");
 const agent = loadKeypair("agent");
@@ -28,7 +30,11 @@ if (adminSol < MIN_ADMIN_SOL) {
     adminSol = (await connection.getBalance(admin.publicKey)) / LAMPORTS_PER_SOL;
   } catch (e) {
     console.error(`\nThe airdrop failed (the devnet faucet is rate-limited): ${(e as Error).message}`);
-    console.error(`Fund the admin at https://faucet.solana.com (network: devnet), address:\n\n  ${admin.publicKey.toBase58()}\n`);
+    console.error(`Send at least ${MIN_ADMIN_SOL} devnet SOL to the admin address:\n\n  ${admin.publicKey.toBase58()}\n`);
+    console.error("Where to get it:");
+    console.error("  - https://faucet.solana.com (network: devnet). Sign in with GitHub if you hit the 2-requests-per-8-hours limit");
+    console.error("  - https://devnetfaucet.org (separate rate limit)");
+    console.error("  - or send it from any wallet that already has devnet SOL (e.g. a teammate's)\n");
     console.error("Then run `npm run setup` again.");
     process.exit(1);
   }
@@ -45,8 +51,8 @@ async function topUp(target: Keypair | PublicKey, minSol: number, label: string)
   await sendAndConfirmTransaction(connection, tx, [admin]);
   console.log(`Sent ${needed / LAMPORTS_PER_SOL} SOL to ${label} for fees`);
 }
-await topUp(agent, 0.1, "agent");
-await topUp(owner, 0.05, "test owner");
+await topUp(agent, 0.05, "agent"); // ~10,000 payments' worth of fees
+await topUp(owner, 0.02, "test owner");
 
 // 3. Test USDC mint. The admin is the mint authority, so we can hand out test dollars freely.
 let state = readState();
