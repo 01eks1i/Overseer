@@ -1,9 +1,10 @@
 // Express middleware that puts a service behind an x402-style paywall and verifies payments on devnet.
 import { randomUUID } from "node:crypto";
 import type { RequestHandler, Response } from "express";
-import type { ParsedInstruction, PartiallyDecodedInstruction } from "@solana/web3.js";
+import { PublicKey, Transaction, sendAndConfirmTransaction, type ParsedInstruction, type PartiallyDecodedInstruction } from "@solana/web3.js";
+import { createTransferCheckedInstruction } from "@solana/spl-token";
 import { API_BASE_URL, NETWORK, requireState } from "../lib/config.js";
-import { connection, sleep, toBaseUnits } from "../lib/solana.js";
+import { connection, explorerTx, loadKeypair, memoInstruction, sleep, toBaseUnits } from "../lib/solana.js";
 import { decodeHeader, encodeHeader, type PaymentPayload, type PaymentRequired, type PaymentResponse } from "../lib/x402.js";
 
 export interface PricedService {
@@ -52,6 +53,7 @@ export function requirePayment(service: PricedService): RequestHandler {
     const receipt: PaymentResponse = { success: true, transaction: signature, network: NETWORK, payer: verified.payer };
     res.setHeader("X-PAYMENT-RESPONSE", encodeHeader(receipt));
     res.locals.payment = receipt;
+    res.locals.refundable = { source: verified.source, amount: verified.amount, signature } satisfies Refundable;
     console.log(`[paid] ${service.id} ${service.priceUsdc} USDC from ${verified.payer} (${signature})`);
     next();
   };
@@ -87,7 +89,48 @@ function sendOffer(res: Response, service: PricedService, amount: bigint, resour
   res.status(402).json(body);
 }
 
-type Verification = { ok: true; payer: string } | { ok: false; reason: string };
+/** A verified payment that can still be sent back if the paid service fails. */
+interface Refundable {
+  source: string;
+  amount: bigint;
+  signature: string;
+}
+
+/**
+ * Sends a verified payment back to the token account it came from. Paid services call this when they fail
+ * after charging, so an agent never pays for nothing. Returns an explorer link, or undefined if there was
+ * nothing to refund or the refund failed (logged).
+ */
+export async function refundPayment(res: Response): Promise<string | undefined> {
+  const paid = res.locals.refundable as Refundable | undefined;
+  if (!paid) return undefined;
+  delete res.locals.refundable; // never refund twice
+  const state = requireState();
+  const merchant = loadKeypair("merchant");
+  const admin = loadKeypair("admin"); // pays the fee: the merchant wallet holds no SOL
+  const tx = new Transaction().add(
+    createTransferCheckedInstruction(
+      new PublicKey(state.merchantTokenAccount),
+      new PublicKey(state.mint),
+      new PublicKey(paid.source),
+      merchant.publicKey,
+      paid.amount,
+      state.decimals,
+    ),
+    memoInstruction(`overseer:refund ${paid.signature}`),
+  );
+  tx.feePayer = admin.publicKey;
+  try {
+    const signature = await sendAndConfirmTransaction(connection, tx, [admin, merchant]);
+    console.log(`[refund] ${paid.amount} base units back to ${paid.source} (${signature})`);
+    return explorerTx(signature);
+  } catch (error) {
+    console.error(`[refund] failed for payment ${paid.signature}:`, error);
+    return undefined;
+  }
+}
+
+type Verification = { ok: true; payer: string; source: string; amount: bigint } | { ok: false; reason: string };
 
 const isParsed = (ix: ParsedInstruction | PartiallyDecodedInstruction): ix is ParsedInstruction => "parsed" in ix;
 
@@ -116,11 +159,12 @@ async function verifyPayment(signature: string, challenge: string, amount: bigin
   );
   if (!transfer) return { ok: false, reason: "No transfer to the merchant in this currency" };
   const info = transfer.parsed.info as { source: string; tokenAmount: { amount: string } };
-  if (BigInt(info.tokenAmount.amount) < amount) return { ok: false, reason: "Payment amount is too low" };
+  const paid = BigInt(info.tokenAmount.amount);
+  if (paid < amount) return { ok: false, reason: "Payment amount is too low" };
 
   // Report the wallet that owns the paying token account (the human), not the agent that signed.
   const keys = tx.transaction.message.accountKeys.map((k) => k.pubkey.toBase58());
   const sourceIndex = keys.indexOf(info.source);
   const payer = tx.meta.preTokenBalances?.find((b) => b.accountIndex === sourceIndex)?.owner ?? info.source;
-  return { ok: true, payer };
+  return { ok: true, payer, source: info.source, amount: paid };
 }

@@ -35,7 +35,7 @@ export function memoInstruction(text: string): TransactionInstruction {
   return new TransactionInstruction({ programId: MEMO_PROGRAM_ID, keys: [], data: Buffer.from(text, "utf8") });
 }
 
-export type ActivityKind = "paid" | "blocked" | "allowance" | "revoked" | "funded" | "failed";
+export type ActivityKind = "paid" | "blocked" | "refunded" | "allowance" | "revoked" | "funded" | "failed";
 
 export interface Activity {
   signature: string;
@@ -61,6 +61,18 @@ export function parseActivity(signature: string, tx: ParsedTransactionWithMeta, 
     if (ix.program !== "spl-token") continue;
     const { type, info } = ix.parsed as { type: string; info: Record<string, any> };
     const amount = uiAmount(info);
+
+    // The paid API sends the money back when a service fails after charging (memo "overseer:refund <payment>").
+    if ((type === "transferChecked" || type === "transfer") && info.destination === ownerTokenAccount && !failed) {
+      const refundOf = memo?.match(/^overseer:refund (\S+)/)?.[1];
+      return {
+        ...base,
+        kind: "refunded",
+        title: refundOf ? `Refunded ${amount} USDC` : `Received ${amount} USDC`,
+        detail: refundOf ? "The service failed after payment, so the money was sent back" : undefined,
+        amount,
+      };
+    }
 
     if ((type === "transferChecked" || type === "transfer") && info.source === ownerTokenAccount) {
       // Memo format from the paid API: "overseer:<challenge> <service description>"

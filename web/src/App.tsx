@@ -298,6 +298,7 @@ function OwnerMismatch({ connected, owner }: { connected: string; owner: string 
 const ICONS: Record<Activity["kind"], string> = {
   paid: "✓",
   blocked: "✕",
+  refunded: "↩",
   allowance: "＋",
   revoked: "⦸",
   funded: "↓",

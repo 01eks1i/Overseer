@@ -1,29 +1,10 @@
 // Paid services sold by the Overseer demo API. Add a service here and it is listed and paywalled automatically.
 import type { Request, Response } from "express";
 import Anthropic from "@anthropic-ai/sdk";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import type { PricedService } from "./payments.js";
+import { refundPayment, type PricedService } from "./payments.js";
 import { apiCatalog } from "./apiCatalog.js";
-
-function cleanJsonText(text: string): string {
-  return text
-    .trim()
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
-}
-
-const ApiRecommendationSchema = z.object({
-  name: z.string(),
-  whatItDoes: z.string(),
-  whyItFits: z.string(),
-  pricingAndAuth: z.string(),
-  docsUrl: z.string().url(),
-  agentPayable: z.string(),
-});
-
-const ApiRecommendationsSchema = z.array(ApiRecommendationSchema);
 
 export interface Service extends PricedService {
   method: "GET" | "POST";
@@ -57,7 +38,7 @@ const weather: Service = {
     };
     const place = geo.results?.[0];
     if (!place) {
-      res.status(404).json({ error: `No city called "${city}" found` });
+      res.status(404).json({ error: `No city called "${city}" found`, refund: await refundPayment(res) });
       return;
     }
     const url =
@@ -89,7 +70,30 @@ const weather: Service = {
   },
 };
 
-const anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY from the environment
+// Reads ANTHROPIC_API_KEY (loaded from .env) when a request is made. Keys that aren't scoped to a
+// workspace must name one on every request, via ANTHROPIC_WORKSPACE_ID.
+const anthropic = new Anthropic({
+  defaultHeaders: process.env.ANTHROPIC_WORKSPACE_ID ? { "anthropic-workspace-id": process.env.ANTHROPIC_WORKSPACE_ID } : undefined,
+});
+
+// Structured outputs restrict Claude to catalog names (enum) and guarantee valid JSON.
+// Every factual field in the response comes from the catalog, so URLs and pricing can't be invented.
+const RecommendationsSchema = z.object({
+  recommendations: z.array(
+    z.object({
+      name: z.enum(apiCatalog.map((api) => api.name) as [string, ...string[]]),
+      whyItFits: z.string(),
+    }),
+  ),
+});
+
+const ANALYZE_SYSTEM_PROMPT = `You recommend existing APIs from a curated catalog that fit a software project's scope and goals.
+
+Catalog:
+${JSON.stringify(apiCatalog, null, 2)}
+
+Pick only catalog APIs that genuinely help this project, best fit first, at most 6. Fewer is fine, and an empty list is the right answer when nothing fits.
+For each pick, explain in one or two sentences why it fits this specific project, and say whether an AI agent could pay for it per request (see "agentPayable").`;
 
 interface AnalyzeBody {
   prompt: string;
@@ -109,6 +113,10 @@ const analyze: Service = {
     readme: "(optional) the project's README, for extra context",
   },
   validate: (req) => {
+    // Checked before payment is requested, so a server without Claude credentials never charges anyone.
+    if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
+      return "The analyzer isn't configured on this server (ANTHROPIC_API_KEY is missing from .env)";
+    }
     const { prompt } = (req.body ?? {}) as Partial<AnalyzeBody>;
     return typeof prompt === "string" && prompt.trim() ? null : "Body field `prompt` is required";
   },
@@ -118,54 +126,41 @@ const analyze: Service = {
       .filter(Boolean)
       .join("\n\n");
 
-    const systemPrompt = `You recommend existing, real, currently-available web APIs that fit a software project's scope and goals.
-Here is the curated catalog of known APIs:
-${JSON.stringify(apiCatalog, null, 2)}
-
-Recommend ONLY APIs from this catalog whenever there is a suitable match.
-Do not invent APIs. Do not invent URLs, pricing, authentication, or capabilities.
-If no catalog entry fits the project's scope and goals, return an empty array [].
-The output must be ONLY a valid JSON array matching this exact schema for each object:
-{"name": string, "whatItDoes": string, "whyItFits": string, "pricingAndAuth": string, "docsUrl": string, "agentPayable": string}
-
-"agentPayable" should be a descriptive string (e.g. "Yes — supports per-request payment" or "No — requires API key/account").
-Recommend 3 to 6 real APIs from the catalog if possible.`;
-
-    let message = await anthropic.messages.create({
-      model: "claude-sonnet-5",
-      max_tokens: 2048,
-      system: systemPrompt,
-      messages: [{ role: "user", content: context }],
-    });
-
-    let text = message.content.find((block) => block.type === "text")?.text ?? "[]";
-    let cleaned = cleanJsonText(text);
-    let recommendations: z.infer<typeof ApiRecommendationsSchema>;
-
+    let message;
     try {
-      recommendations = ApiRecommendationsSchema.parse(JSON.parse(cleaned));
-    } catch (err) {
-      message = await anthropic.messages.create({
+      message = await anthropic.messages.parse({
         model: "claude-sonnet-5",
-        max_tokens: 2048,
-        system: systemPrompt,
-        messages: [
-          { role: "user", content: context },
-          { role: "assistant", content: text },
-          { role: "user", content: "The previous response was either not valid JSON or did not match the required schema. Return ONLY valid JSON matching the schema, with no markdown fences or extra text." }
-        ],
+        // Sonnet 5 thinks by default and thinking counts toward max_tokens; a low cap truncates the JSON.
+        max_tokens: 16000,
+        system: ANALYZE_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: context }],
+        output_config: { format: zodOutputFormat(RecommendationsSchema) },
       });
-      
-      text = message.content.find((block) => block.type === "text")?.text ?? "[]";
-      cleaned = cleanJsonText(text);
-      
-      try {
-        recommendations = ApiRecommendationsSchema.parse(JSON.parse(cleaned));
-      } catch (err2) {
-        res.status(502).json({ error: "Claude returned a response that wasn't valid JSON or didn't match schema after retry", raw: text });
-        return;
-      }
+    } catch (error) {
+      if (!(error instanceof Anthropic.APIError)) throw error;
+      res.status(502).json({ error: `Claude API error ${error.status ?? ""}: ${error.message}`, refund: await refundPayment(res) });
+      return;
     }
+
+    if (message.stop_reason !== "end_turn" || !message.parsed_output) {
+      res.status(502).json({
+        error: `The analyzer couldn't produce recommendations (stop reason: ${message.stop_reason})`,
+        refund: await refundPayment(res),
+      });
+      return;
+    }
+
+    const recommendations = message.parsed_output.recommendations.map(({ name, whyItFits }) => {
+      const api = apiCatalog.find((entry) => entry.name === name)!;
+      return {
+        name,
+        whatItDoes: api.description,
+        whyItFits,
+        pricingAndAuth: [api.pricing, api.authentication].filter(Boolean).join(" ") || "Not listed",
+        docsUrl: api.docsUrl,
+        agentPayable: api.agentPayable ?? "Not listed",
+      };
+    });
 
     res.json({ recommendations, payment: res.locals.payment });
   },

@@ -1,6 +1,6 @@
 import express from "express";
 import { API_BASE_URL, API_PORT, NETWORK, requireState } from "../lib/config.js";
-import { requirePayment } from "./payments.js";
+import { refundPayment, requirePayment } from "./payments.js";
 import { services } from "./services.js";
 
 const app = express();
@@ -47,9 +47,10 @@ for (const service of services) {
   );
 }
 
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use(async (err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err);
-  res.status(500).json({ error: err.message });
+  // A service that crashes after being paid gives the money back.
+  res.status(500).json({ error: err.message, refund: await refundPayment(res) });
 });
 
 requireState(); // Fail fast if setup hasn't run.

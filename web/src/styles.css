@@ -418,7 +418,8 @@ h2 {
 .row-blocked .row-title {
   color: var(--danger);
 }
-.row-allowance .row-icon {
+.row-allowance .row-icon,
+.row-refunded .row-icon {
   background: var(--info-soft);
   color: var(--info);
 }
