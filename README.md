@@ -1,6 +1,8 @@
-# Overseer
+# ApiSift
 
-**Spending limits for AI agents, enforced by Solana.**
+**An API agent for developers: it finds the APIs your project needs and pays for them per call, within spending limits enforced by Solana.**
+
+The codebase and MCP tools still use the working name *Overseer*.
 
 Built at BUILD IRL Vol. 1 (Solana hackathon, Dublin, 26 Sept 2026).
 
@@ -49,8 +51,9 @@ The payment flow follows the [x402](https://solana.com/x402) pattern (HTTP 402 +
 | `src/scripts` | One-command devnet setup, test USDC, funding, approve / revoke / status from the command line | ✅ Done |
 | `src/api` | Paid API: 402 offers, on-chain payment check, weather service ($0.01) | ✅ Done |
 | `src/agent` | Agent wallet, paying `fetch`, MCP server for Claude, CLI demo | ✅ Done |
-| `web/` | **Dashboard**: connect a wallet, set / revoke the allowance, live payment feed | 🟡 Built, needs a live devnet test (Task A) |
-| `src/api/services.ts` | **API analyzer**: premium paid service | 🔲 To build (Task B) |
+| `web/` | **ApiSift web app**: Projects (each with its own budget, agent and allowance), project detail with live feed, API Analyzer page | ✅ Built, tested against the API; not yet reviewed in a browser by the team |
+| `src/api/office.ts` | **Office API** behind the web app: projects, allowances, repo analysis (demo wallet, localhost only) | ✅ Done, tested on devnet |
+| `src/api/services.ts` | **API analyzer** paid service (0.25 USDC): structured outputs over a curated catalog, refunds on failure | 🟡 Needs a workspace-scoped Anthropic key (see Troubleshooting) |
 | Demo run-through, prompts, backup recording | | 🔲 Task C |
 | Pitch deck (**.pptx only**) | | 🔲 Task D |
 
@@ -131,12 +134,17 @@ npm run status             # allowance, balances, agent SOL for fees
 
 Claude gets three tools: `overseer_status`, `overseer_list_services`, and `overseer_paid_fetch`.
 
-**The dashboard**, terminal 3:
+**The ApiSift web app**, terminal 3:
 ```bash
-npm run fund -- <your devnet wallet address>   # 50 test USDC + a little SOL; the agent now spends from your wallet
-npm run web                                     # http://localhost:5173
+npm run web      # http://localhost:5173
 ```
-Connect the same wallet, set an allowance, then let Claude (or `npm run demo`) spend. Payments appear in the live feed within a few seconds. Blocked ones flash red.
+- **Projects** (`#/projects`): the office. Create a project and it gets its own agent key and its own budget account on Solana. Every project's allowance is a separate on-chain limit.
+- **Project page** (`#/projects/<id>`): set or revoke the allowance (signed by the demo wallet), the agent and budget accounts, the `.mcp.json` snippet that points Claude at this project, and the live activity feed.
+- **API Analyzer** (`#/analyzer`): paste a public GitHub repo link and pick a project. ApiSift reads the repo for free, then the project's agent pays 0.25 USDC over x402 and Claude recommends APIs from the catalog. If the project's allowance is too small, Solana blocks the payment; if the analysis fails after payment, the money is refunded.
+
+The web app uses the built-in **demo wallet** (`keys/owner.json`), so no browser wallet is needed. Its office API only answers requests from the same machine.
+
+**Point Claude at a project:** add `"env": { "APISIFT_PROJECT": "<project id>" }` to the `overseer` server in `.mcp.json`, or tell Claude which project to use (the MCP tools take a `project` parameter).
 
 ## Commands
 
@@ -150,7 +158,7 @@ Connect the same wallet, set an allowance, then let Claude (or `npm run demo`) s
 | `npm run api` | Start the paid API on http://localhost:4020 |
 | `npm run demo -- [city]` | The agent buys weather data from the command line |
 | `npm run mcp` | Start the MCP server by hand (Claude Code starts it for you) |
-| `npm run web` | Start the dashboard on http://localhost:5173 |
+| `npm run web` | Start the ApiSift web app on http://localhost:5173 |
 | `npm run typecheck` | Type-check the backend and the dashboard |
 
 ## Project structure
@@ -161,6 +169,7 @@ bin/overseer-mcp.sh       MCP launcher (also finds Node in ~/.local/node)
 src/
   lib/
     config.ts             .env, paths, local state (.overseer/state.json, web/src/overseer.json)
+    projects.ts           ApiSift projects (.overseer/projects.json): agent key + budget account each
     solana.ts             RPC connection, keypairs, memo, explorer links, amount helpers
     x402.ts               402 / X-PAYMENT message shapes
   agent/
@@ -171,11 +180,16 @@ src/
   api/
     server.ts             Express server + /api/services catalog
     payments.ts           paywall middleware + on-chain payment check
-    services.ts           paid services (add new ones here)
+    services.ts           paid services (add new ones here): weather, analyzer
+    apiCatalog.ts         curated APIs the analyzer can recommend
+    office.ts             web app backend: projects, allowances, repo analysis (demo wallet)
+    github.ts             reads a public repo: metadata, file tree, README, dependency manifest
   scripts/                setup, fund, approve, revoke, status
-web/                      dashboard (Vite + React + wallet adapter)
-  src/App.tsx             allowance card, approve / revoke, services, live feed
-  src/overseer.ts         reads the owner's token account + history from devnet
+web/                      ApiSift web app (Vite + React)
+  src/App.tsx             shell, navigation, routes (#/projects, #/projects/<id>, #/analyzer)
+  src/pages/              Projects, ProjectDetail, Analyzer
+  src/api.ts              office API client + hash router
+  src/overseer.ts         activity feed: reads a budget account's history from devnet
   src/overseer.json       addresses written by setup (gitignored)
 ```
 
@@ -196,9 +210,13 @@ web/                      dashboard (Vite + React + wallet adapter)
 - Test USDC is our own devnet token, so wallets show it as an unknown token.
 - The paid API keeps payment challenges and used transactions **in memory**. Restarting it clears them.
 - The public devnet RPC is rate-limited. Put a free [Helius](https://www.helius.dev/) devnet URL in `RPC_URL` for the demo.
+- The web app signs with a **demo wallet held by the server**. A real product would sign in the user's wallet (Phantom etc.).
+- A refund returns the money but not the allowance: the Token program already used up that part of the delegation, so set the allowance again.
+- The analyzer only recommends APIs from `src/api/apiCatalog.ts`, which is small. GitHub allows 60 unauthenticated API calls an hour per IP; set `GITHUB_TOKEN` in `.env` if you hit that.
 
 ## Troubleshooting
 
 - **`429 Too Many Requests`:** the public RPC or faucet is rate-limited. Wait a bit, or use a Helius devnet `RPC_URL`.
 - **Claude Code doesn't show the tools:** check that `npm install` ran and the server is approved (`/mcp` in Claude Code). The launcher needs `node` on PATH or in `~/.local/node/bin`.
-- **The dashboard shows a different owner:** the agent spends from the wallet set by the last `npm run fund`. Run `npm run fund -- <your address>`.
+- **Analyzer says "This API key is not scoped to a workspace":** use an Anthropic key created inside a workspace, or add `ANTHROPIC_WORKSPACE_ID=<id>` to `.env` and restart `npm run api`. Paid calls that fail this way are refunded automatically.
+- **The web app says the API isn't reachable:** start it with `npm run api` (port 4020).

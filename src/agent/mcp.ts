@@ -18,6 +18,13 @@ const server = new McpServer(
   },
 );
 
+// Which ApiSift project pays when Claude doesn't name one (set it in .mcp.json → env).
+const DEFAULT_PROJECT = process.env.APISIFT_PROJECT || undefined;
+const projectParam = z
+  .string()
+  .optional()
+  .describe("ApiSift project (id or name) whose budget pays. Defaults to the project configured for this session.");
+
 const asText = (value: unknown) => ({
   content: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }],
 });
@@ -27,8 +34,9 @@ server.registerTool(
   {
     title: "Allowance status",
     description: "Show how much USDC allowance you have left, the owner's balance, and your SOL for transaction fees.",
+    inputSchema: { project: projectParam },
   },
-  async () => asText(await getAllowance()),
+  async ({ project }) => asText(await getAllowance(project ?? DEFAULT_PROJECT)),
 );
 
 server.registerTool(
@@ -56,10 +64,11 @@ server.registerTool(
       method: z.enum(["GET", "POST"]).optional(),
       body: z.string().optional().describe("JSON request body, for POST"),
       max_price_usdc: z.number().positive().optional().describe("Refuse to pay more than this for one request"),
+      project: projectParam,
     },
   },
-  async ({ url, method, body, max_price_usdc }) => {
-    const result = await paidFetch(url, { method, body, maxPriceUsdc: max_price_usdc });
+  async ({ url, method, body, max_price_usdc, project }) => {
+    const result = await paidFetch(url, { method, body, maxPriceUsdc: max_price_usdc, project: project ?? DEFAULT_PROJECT });
     if (result.payment && !result.payment.ok) {
       return {
         ...asText({
