@@ -1,0 +1,34 @@
+{
+  "name": "overseer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Spending limits for AI agents, enforced by Solana",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "setup": "tsx src/scripts/setup.ts",
+    "fund": "tsx src/scripts/fund.ts",
+    "approve": "tsx src/scripts/approve.ts",
+    "revoke": "tsx src/scripts/revoke.ts",
+    "status": "tsx src/scripts/status.ts",
+    "api": "tsx src/api/server.ts",
+    "mcp": "tsx src/agent/mcp.ts",
+    "demo": "tsx src/agent/demo.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "@solana/spl-token": "^0.4.15",
+    "@solana/web3.js": "^1.99.0",
+    "express": "^5.2.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}

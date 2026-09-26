@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+# Devnet keypairs and local state: never commit
+keys/
+.overseer/
+web/src/overseer.json
